@@ -71,6 +71,7 @@ export interface TestHarness {
   logs: TestHarnessLogEntry[];
   activity: Array<{ message: string; entityType?: string; entityId?: string; metadata?: Record<string, unknown> }>;
   metrics: Array<{ name: string; value: number; tags?: Record<string, string> }>;
+  telemetry: Array<{ eventName: string; dimensions?: Record<string, string | number | boolean> }>;
 }
 
 type EventRegistration = {
@@ -132,6 +133,7 @@ export function createTestHarness(options: TestHarnessOptions): TestHarness {
   const logs: TestHarnessLogEntry[] = [];
   const activity: TestHarness["activity"] = [];
   const metrics: TestHarness["metrics"] = [];
+  const telemetry: TestHarness["telemetry"] = [];
 
   const state = new Map<string, unknown>();
   const entities = new Map<string, PluginEntityRecord>();
@@ -353,6 +355,7 @@ export function createTestHarness(options: TestHarnessOptions): TestHarness {
           id: randomUUID(),
           companyId: input.companyId,
           projectId: input.projectId ?? null,
+          projectWorkspaceId: null,
           goalId: input.goalId ?? null,
           parentId: input.parentId ?? null,
           title: input.title,
@@ -372,6 +375,8 @@ export function createTestHarness(options: TestHarnessOptions): TestHarness {
           requestDepth: 0,
           billingCode: null,
           assigneeAdapterOverrides: null,
+          executionWorkspaceId: null,
+          executionWorkspacePreference: null,
           executionWorkspaceSettings: null,
           startedAt: null,
           completedAt: null,
@@ -400,7 +405,7 @@ export function createTestHarness(options: TestHarnessOptions): TestHarness {
         if (!isInCompany(issues.get(issueId), companyId)) return [];
         return issueComments.get(issueId) ?? [];
       },
-      async createComment(issueId, body, companyId) {
+      async createComment(issueId, body, companyId, options) {
         requireCapability(manifest, capabilitySet, "issue.comments.create");
         const parentIssue = issues.get(issueId);
         if (!isInCompany(parentIssue, companyId)) {
@@ -411,7 +416,7 @@ export function createTestHarness(options: TestHarnessOptions): TestHarness {
           id: randomUUID(),
           companyId: parentIssue.companyId,
           issueId,
-          authorAgentId: null,
+          authorAgentId: options?.authorAgentId ?? null,
           authorUserId: null,
           body,
           createdAt: now,
@@ -421,6 +426,33 @@ export function createTestHarness(options: TestHarnessOptions): TestHarness {
         current.push(comment);
         issueComments.set(issueId, current);
         return comment;
+      },
+      documents: {
+        async list(issueId, companyId) {
+          requireCapability(manifest, capabilitySet, "issue.documents.read");
+          if (!isInCompany(issues.get(issueId), companyId)) return [];
+          return [];
+        },
+        async get(issueId, _key, companyId) {
+          requireCapability(manifest, capabilitySet, "issue.documents.read");
+          if (!isInCompany(issues.get(issueId), companyId)) return null;
+          return null;
+        },
+        async upsert(input) {
+          requireCapability(manifest, capabilitySet, "issue.documents.write");
+          const parentIssue = issues.get(input.issueId);
+          if (!isInCompany(parentIssue, input.companyId)) {
+            throw new Error(`Issue not found: ${input.issueId}`);
+          }
+          throw new Error("documents.upsert is not implemented in test context");
+        },
+        async delete(issueId, _key, companyId) {
+          requireCapability(manifest, capabilitySet, "issue.documents.write");
+          const parentIssue = issues.get(issueId);
+          if (!isInCompany(parentIssue, companyId)) {
+            throw new Error(`Issue not found: ${issueId}`);
+          }
+        },
       },
     },
     agents: {
@@ -601,6 +633,12 @@ export function createTestHarness(options: TestHarnessOptions): TestHarness {
         metrics.push({ name, value, tags });
       },
     },
+    telemetry: {
+      async track(eventName, dimensions) {
+        requireCapability(manifest, capabilitySet, "telemetry.track");
+        telemetry.push({ eventName, dimensions });
+      },
+    },
     logger: {
       info(message, meta) {
         logs.push({ level: "info", message, meta });
@@ -699,6 +737,7 @@ export function createTestHarness(options: TestHarnessOptions): TestHarness {
     logs,
     activity,
     metrics,
+    telemetry,
   };
 
   return harness;

@@ -19,6 +19,8 @@ import type {
   Project,
   Issue,
   IssueComment,
+  IssueDocument,
+  IssueDocumentSummary,
   Agent,
   Goal,
 } from "@paperclipai/shared";
@@ -61,6 +63,8 @@ export type {
   Project,
   Issue,
   IssueComment,
+  IssueDocument,
+  IssueDocumentSummary,
   Agent,
   Goal,
 } from "@paperclipai/shared";
@@ -758,6 +762,28 @@ export interface PluginMetricsClient {
 }
 
 /**
+ * `ctx.telemetry` — emit plugin-scoped telemetry to the host's external
+ * telemetry pipeline.
+ *
+ * Requires `telemetry.track` capability.
+ */
+export interface PluginTelemetryClient {
+  /**
+   * Track a plugin telemetry event.
+   *
+   * The host prefixes the final event name as `plugin.<pluginId>.<eventName>`
+   * before forwarding it to the shared telemetry client.
+   *
+   * @param eventName - Bare plugin event slug (for example `"sync_completed"`)
+   * @param dimensions - Optional structured dimensions
+   */
+  track(
+    eventName: string,
+    dimensions?: Record<string, string | number | boolean>,
+  ): Promise<void>;
+}
+
+/**
  * `ctx.companies` — read company metadata.
  *
  * Requires `companies.read` capability.
@@ -775,6 +801,73 @@ export interface PluginCompaniesClient {
 }
 
 /**
+ * `ctx.issues.documents` — read and write issue documents.
+ *
+ * Requires:
+ * - `issue.documents.read` for `list` and `get`
+ * - `issue.documents.write` for `upsert` and `delete`
+ *
+ * @see PLUGIN_SPEC.md §14 — SDK Surface
+ */
+export interface PluginIssueDocumentsClient {
+  /**
+   * List all documents attached to an issue.
+   *
+   * Returns summary metadata (id, key, title, format, timestamps) without
+   * the full document body. Use `get()` to fetch a specific document's body.
+   *
+   * Requires the `issue.documents.read` capability.
+   */
+  list(issueId: string, companyId: string): Promise<IssueDocumentSummary[]>;
+
+  /**
+   * Get a single document by key, including its full body content.
+   *
+   * Returns `null` if no document exists with the given key.
+   *
+   * Requires the `issue.documents.read` capability.
+   *
+   * @param issueId - UUID of the issue
+   * @param key - Document key (e.g. `"plan"`, `"design-spec"`)
+   * @param companyId - UUID of the company
+   */
+  get(issueId: string, key: string, companyId: string): Promise<IssueDocument | null>;
+
+  /**
+   * Create or update a document on an issue.
+   *
+   * If a document with the given key already exists, it is updated and a new
+   * revision is created. If it does not exist, it is created.
+   *
+   * Requires the `issue.documents.write` capability.
+   *
+   * @param input - Document data including issueId, key, body, and optional title/format/changeSummary
+   */
+  upsert(input: {
+    issueId: string;
+    key: string;
+    body: string;
+    companyId: string;
+    title?: string;
+    format?: string;
+    changeSummary?: string;
+  }): Promise<IssueDocument>;
+
+  /**
+   * Delete a document and all its revisions.
+   *
+   * No-ops silently if the document does not exist (idempotent).
+   *
+   * Requires the `issue.documents.write` capability.
+   *
+   * @param issueId - UUID of the issue
+   * @param key - Document key to delete
+   * @param companyId - UUID of the company
+   */
+  delete(issueId: string, key: string, companyId: string): Promise<void>;
+}
+
+/**
  * `ctx.issues` — read and mutate issues plus comments.
  *
  * Requires:
@@ -783,6 +876,8 @@ export interface PluginCompaniesClient {
  * - `issues.update` for update
  * - `issue.comments.read` for `listComments`
  * - `issue.comments.create` for `createComment`
+ * - `issue.documents.read` for `documents.list` and `documents.get`
+ * - `issue.documents.write` for `documents.upsert` and `documents.delete`
  */
 export interface PluginIssuesClient {
   list(input: {
@@ -799,6 +894,7 @@ export interface PluginIssuesClient {
     projectId?: string;
     goalId?: string;
     parentId?: string;
+    inheritExecutionWorkspaceFromIssueId?: string;
     title: string;
     description?: string;
     priority?: Issue["priority"];
@@ -813,7 +909,14 @@ export interface PluginIssuesClient {
     companyId: string,
   ): Promise<Issue>;
   listComments(issueId: string, companyId: string): Promise<IssueComment[]>;
-  createComment(issueId: string, body: string, companyId: string): Promise<IssueComment>;
+  createComment(
+    issueId: string,
+    body: string,
+    companyId: string,
+    options?: { authorAgentId?: string },
+  ): Promise<IssueComment>;
+  /** Read and write issue documents. Requires `issue.documents.read` / `issue.documents.write`. */
+  documents: PluginIssueDocumentsClient;
 }
 
 /**
@@ -1056,7 +1159,7 @@ export interface PluginContext {
   /** Read company metadata. Requires `companies.read`. */
   companies: PluginCompaniesClient;
 
-  /** Read and write issues/comments. Requires issue capabilities. */
+  /** Read and write issues, comments, and documents. Requires issue capabilities. */
   issues: PluginIssuesClient;
 
   /** Read and manage agents. Requires `agents.read` for reads; `agents.pause` / `agents.resume` / `agents.invoke` for write ops. */
@@ -1079,6 +1182,9 @@ export interface PluginContext {
 
   /** Write plugin metrics. Requires `metrics.write`. */
   metrics: PluginMetricsClient;
+
+  /** Emit plugin-scoped external telemetry. Requires `telemetry.track`. */
+  telemetry: PluginTelemetryClient;
 
   /** Structured logger. Output is captured and surfaced in the plugin health dashboard. */
   logger: PluginLogger;

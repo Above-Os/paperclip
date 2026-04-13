@@ -16,6 +16,7 @@ import { agentService } from "./agents.js";
 import { projectService } from "./projects.js";
 import { issueService } from "./issues.js";
 import { goalService } from "./goals.js";
+import { documentService } from "./documents.js";
 import { heartbeatService } from "./heartbeat.js";
 import { subscribeCompanyLiveEvents } from "./live-events.js";
 import { randomUUID } from "node:crypto";
@@ -33,6 +34,7 @@ import { request as httpRequest } from "node:http";
 import { request as httpsRequest } from "node:https";
 import { isIP } from "node:net";
 import { logger } from "../middleware/logger.js";
+import { getTelemetryClient } from "../telemetry.js";
 
 // ---------------------------------------------------------------------------
 // SSRF protection for plugin HTTP fetch
@@ -46,6 +48,7 @@ const DNS_LOOKUP_TIMEOUT_MS = 5_000;
 
 /** Only these protocols are allowed for plugin HTTP requests. */
 const ALLOWED_PROTOCOLS = new Set(["http:", "https:"]);
+const TELEMETRY_EVENT_NAME_REGEX = /^[a-z0-9][a-z0-9_-]*$/;
 
 /**
  * Check if an IP address is in a private/reserved range (RFC 1918, loopback,
@@ -450,6 +453,7 @@ export function buildHostServices(
   const heartbeat = heartbeatService(db);
   const projects = projectService(db);
   const issues = issueService(db);
+  const documents = documentService(db);
   const goals = goalService(db);
   const activity = activityService(db);
   const costs = costService(db);
@@ -634,6 +638,20 @@ export function buildHostServices(
       },
     },
 
+    telemetry: {
+      async track(params) {
+        const eventName = String(params.eventName ?? "").trim();
+        if (!TELEMETRY_EVENT_NAME_REGEX.test(eventName)) {
+          throw new Error(
+            'Plugin telemetry event names must be lowercase slugs using letters, numbers, "_" or "-".',
+          );
+        }
+        const telemetryClient = getTelemetryClient();
+        if (!telemetryClient) return;
+        telemetryClient.track(`plugin.${pluginKey}.${eventName}`, params.dimensions);
+      },
+    },
+
     logger: {
       async log(params) {
         const { level, meta } = params;
@@ -716,17 +734,16 @@ export function buildHostServices(
         const project = await projects.getById(params.projectId);
         if (!inCompany(project, companyId)) return null;
         const row = project.primaryWorkspace;
-        if (!row) return null;
-        const path = sanitizeWorkspacePath(row.cwd);
-        const name = sanitizeWorkspaceName(row.name, path);
+        const path = sanitizeWorkspacePath(project.codebase.effectiveLocalFolder);
+        const name = sanitizeWorkspaceName(row?.name ?? project.name, path);
         return {
-          id: row.id,
-          projectId: row.projectId,
+          id: row?.id ?? `${project.id}:managed`,
+          projectId: project.id,
           name,
           path,
-          isPrimary: row.isPrimary,
-          createdAt: row.createdAt.toISOString(),
-          updatedAt: row.updatedAt.toISOString(),
+          isPrimary: true,
+          createdAt: (row?.createdAt ?? project.createdAt).toISOString(),
+          updatedAt: (row?.updatedAt ?? project.updatedAt).toISOString(),
         };
       },
 
@@ -740,17 +757,16 @@ export function buildHostServices(
         const project = await projects.getById(projectId);
         if (!inCompany(project, companyId)) return null;
         const row = project.primaryWorkspace;
-        if (!row) return null;
-        const path = sanitizeWorkspacePath(row.cwd);
-        const name = sanitizeWorkspaceName(row.name, path);
+        const path = sanitizeWorkspacePath(project.codebase.effectiveLocalFolder);
+        const name = sanitizeWorkspaceName(row?.name ?? project.name, path);
         return {
-          id: row.id,
-          projectId: row.projectId,
+          id: row?.id ?? `${project.id}:managed`,
+          projectId: project.id,
           name,
           path,
-          isPrimary: row.isPrimary,
-          createdAt: row.createdAt.toISOString(),
-          updatedAt: row.updatedAt.toISOString(),
+          isPrimary: true,
+          createdAt: (row?.createdAt ?? project.createdAt).toISOString(),
+          updatedAt: (row?.updatedAt ?? project.updatedAt).toISOString(),
         };
       },
     },
@@ -791,8 +807,45 @@ export function buildHostServices(
         return (await issues.addComment(
           params.issueId,
           params.body,
-          {},
+          { agentId: params.authorAgentId },
         )) as IssueComment;
+      },
+    },
+
+    issueDocuments: {
+      async list(params) {
+        const companyId = ensureCompanyId(params.companyId);
+        await ensurePluginAvailableForCompany(companyId);
+        requireInCompany("Issue", await issues.getById(params.issueId), companyId);
+        const rows = await documents.listIssueDocuments(params.issueId);
+        return rows as any;
+      },
+      async get(params) {
+        const companyId = ensureCompanyId(params.companyId);
+        await ensurePluginAvailableForCompany(companyId);
+        requireInCompany("Issue", await issues.getById(params.issueId), companyId);
+        const doc = await documents.getIssueDocumentByKey(params.issueId, params.key);
+        return (doc ?? null) as any;
+      },
+      async upsert(params) {
+        const companyId = ensureCompanyId(params.companyId);
+        await ensurePluginAvailableForCompany(companyId);
+        requireInCompany("Issue", await issues.getById(params.issueId), companyId);
+        const result = await documents.upsertIssueDocument({
+          issueId: params.issueId,
+          key: params.key,
+          body: params.body,
+          title: params.title ?? null,
+          format: params.format ?? "markdown",
+          changeSummary: params.changeSummary ?? null,
+        });
+        return result.document as any;
+      },
+      async delete(params) {
+        const companyId = ensureCompanyId(params.companyId);
+        await ensurePluginAvailableForCompany(companyId);
+        requireInCompany("Issue", await issues.getById(params.issueId), companyId);
+        await documents.deleteIssueDocument(params.issueId, params.key);
       },
     },
 
