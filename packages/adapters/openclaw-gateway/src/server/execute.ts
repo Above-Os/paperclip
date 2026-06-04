@@ -86,7 +86,8 @@ type GatewayClientRequestOptions = {
   expectFinal?: boolean;
 };
 
-const PROTOCOL_VERSION = 3;
+const PROTOCOL_MIN = 3;
+const PROTOCOL_MAX = 4;
 const DEFAULT_SCOPES = ["operator.admin"];
 const DEFAULT_CLIENT_ID = "gateway-client";
 const DEFAULT_CLIENT_MODE = "backend";
@@ -871,8 +872,8 @@ async function autoApproveDevicePairing(params: {
 
     await client.connect(
       () => ({
-        minProtocol: PROTOCOL_VERSION,
-        maxProtocol: PROTOCOL_VERSION,
+        minProtocol: PROTOCOL_MIN,
+        maxProtocol: PROTOCOL_MAX,
         client: {
           id: params.clientId,
           version: params.clientVersion,
@@ -1139,7 +1140,6 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     idempotencyKey: ctx.runId,
   };
   delete agentParams.text;
-  agentParams.paperclip = paperclipPayload;
 
   const configuredAgentId = nonEmpty(ctx.config.agentId);
   if (configuredAgentId && !nonEmpty(agentParams.agentId)) {
@@ -1263,8 +1263,8 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       const hello = await client.connect((nonce) => {
         const signedAtMs = Date.now();
         const connectParams: Record<string, unknown> = {
-          minProtocol: PROTOCOL_VERSION,
-          maxProtocol: PROTOCOL_VERSION,
+          minProtocol: PROTOCOL_MIN,
+          maxProtocol: PROTOCOL_MAX,
           client: {
             id: clientId,
             version: clientVersion,
@@ -1310,7 +1310,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
 
       await ctx.onLog(
         "stdout",
-        `[openclaw-gateway] connected protocol=${asNumber(asRecord(hello)?.protocol, PROTOCOL_VERSION)}\n`,
+        `[openclaw-gateway] connected protocol=${asNumber(asRecord(hello)?.protocol, PROTOCOL_MAX)}\n`,
       );
 
       const acceptedPayload = await client.request<Record<string, unknown>>("agent", agentParams, {
