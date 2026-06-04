@@ -3,7 +3,7 @@ FROM node:lts-trixie-slim AS base
 ARG USER_UID=1000
 ARG USER_GID=1000
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends ca-certificates gosu curl gh git wget ripgrep python3 \
+  && apt-get install -y --no-install-recommends ca-certificates gosu curl gh git wget ripgrep python3 python3-pip python3-venv \
   && rm -rf /var/lib/apt/lists/* \
   && corepack enable
 
@@ -57,7 +57,13 @@ ARG USER_UID=1000
 ARG USER_GID=1000
 WORKDIR /app
 COPY --chown=node:node --from=build /app /app
-RUN npm install --global --omit=dev @anthropic-ai/claude-code@latest @openai/codex@latest opencode-ai @mariozechner/pi-coding-agent hermes-agent\
+RUN python3 -m venv /opt/venvs/hermes \
+  && PATH=/opt/venvs/hermes/bin:$PATH npm install --global --omit=dev \
+       @anthropic-ai/claude-code@latest \
+       @openai/codex@latest \
+       opencode-ai \
+       @mariozechner/pi-coding-agent \
+       hermes-agent \
   && apt-get update \
   && apt-get install -y --no-install-recommends openssh-client jq \
   && rm -rf /var/lib/apt/lists/* \
@@ -69,6 +75,7 @@ RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 
 ENV NODE_ENV=production \
   HOME=/paperclip \
+  PATH=/opt/venvs/hermes/bin:${PATH} \
   HOST=0.0.0.0 \
   PORT=3100 \
   SERVE_UI=true \
